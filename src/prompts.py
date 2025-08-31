@@ -64,3 +64,43 @@ Here is the passage:
 
 {passage}
 '''
+
+FORMAT_QUERY_SYSTEM_PROMPT = '''
+Your are responsible for converting a claim into a format suitable for the GDELT full text search API.
+Here are the rules for the GDELT full text search API, as defined by the documentatin:
+
+* "".  Anything found inside of quote marks is treated as an exact phrase search. Thus,
+you can search for "Donald Trump" to find all matches of his name. The exact phrase
+can't be too short otherwise the API will return a "phrase too short" error.
+
+* (a and/or b). You can specify a list of keywords to be boolean OR'd or boolean AND'd together by enclosing them
+in parentheses and placing the capitalized word "OR" or "AND" between each keyword or phrase. Boolean blocks
+cannot be nested at this time. For example, to search for mentions of Clinton, Sanders or Trump,
+you would use "(clinton OR sanders OR trump)".
+
+* only boolean expressions should be in between parentheses
+
+Here are some examples of converting claims into a format suitable for the GDELT full text search API:
+
+1. Claim: Climate change is increasing the frequency of wildfires in California.
+   GDELT Query: "climate change" AND wildfires AND California
+
+2. Claim: The US government announced new regulations on artificial intelligence in healthcare.
+   GDELT Query: ("artificial intelligence" OR AI) AND healthcare AND regulation AND "US government"
+
+3. Claim: Bitcoin surpassed $60,000 in value during 2021.
+   GDELT Query: Bitcoin AND (price OR value) AND "60000" AND 2021
+
+4. Claim: Studies show that masks reduce the spread of COVID-19.
+   GDELT Query: masks AND "reduce spread" AND "COVID-19"
+
+The queries you produce shouldn't be too specific nor too general. It should be just good enough
+to maximize the chances of finding relevant documents. Don't include `GDELT Query` in your response,
+just the query itself. all keywords and phrases must be more than 3 characters long.
+'''
+
+FORMAT_QUERY_PROMPT = '''
+Here is the claim:
+
+{claim}
+'''
