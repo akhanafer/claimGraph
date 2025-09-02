@@ -104,3 +104,8 @@ Here is the claim:
 
 {claim}
 '''
+
+STRUCTURED_OUTPUT_PROMPT = '''
+You are simply responsible for getting the subject
+and claim from the provided text to comply with the output format given to you.
+'''

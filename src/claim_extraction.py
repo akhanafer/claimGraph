@@ -10,7 +10,7 @@ from ollama import chat
 from pydantic import BaseModel, ValidationError
 
 from src.gdelt_api_client import full_text_search
-from src.prompts import CLAIM_EXTRACTION_PROMPT, CLAIM_EXTRACTION_SYSTEM_PROMPT
+from src.prompts import CLAIM_EXTRACTION_PROMPT, CLAIM_EXTRACTION_SYSTEM_PROMPT, STRUCTURED_OUTPUT_PROMPT
 from src.pydantic_models.gdelt_api_params import (
     FullTextSearchParams,
     FullTextSearchQueryCommands,
@@ -70,8 +70,7 @@ def get_chunk_claims(
                 messages=[
                     {
                         'role': 'system',
-                        'content': 'You are simply responsible for getting the subject'
-                        ' and claim from the provided text to comply with the output format given to you',
+                        'content': STRUCTURED_OUTPUT_PROMPT,
                     },
                     {'role': 'user', 'content': response.message.content},
                 ],
@@ -110,12 +109,21 @@ def get_claim_sources(claim_df: pd.DataFrame) -> pd.DataFrame:
     claim_df_copy = claim_df.copy()
     claim_df_copy['source_tuples'] = claim_df_copy['claim'].apply(_perform_full_text_search)
     claim_df_copy_exploded = claim_df_copy.explode('source_tuples').reset_index(drop=True)
-    claim_df_copy_exploded[['source_id', 'source', 'formatted_query']] = pd.DataFrame(
+    claim_df_copy_exploded[['source_id', 'url', 'formatted_query']] = pd.DataFrame(
         claim_df_copy_exploded['source_tuples'].tolist(), index=claim_df_copy_exploded.index
     )
 
     return claim_df_copy_exploded.drop(columns=['source_tuples'])
 
+def create_edge_list(
+        chunk_claims_df: pd.DataFrame,
+        claim_source_df: pd.DataFrame
+    ) -> pd.DataFrame:
+    joint_df = pd.merge(chunk_claims_df, claim_source_df,on='claim_id', how='inner', suffixes=('_source', '_target'))
+    joint_df = joint_df[['source_id_source', 'source_id_target', 'claim_id', 'claim_source', 'url_target']]
+    joint_df = joint_df[joint_df['source_id_target'] != 0] # TODO: Handle cases where source_id_target is 0
+    joint_df['claim_info'] = list(zip(joint_df['claim_id'], joint_df['claim_source']))
+    return joint_df
 
 def _fetch_source_html(url: str) -> str:
     response = requests.get(url)
@@ -148,20 +156,22 @@ def main(
     chunked_df = chunk_text(text_df, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     chunk_claims_df = get_chunk_claims(chunked_df, claim_model=claim_model, structured_output_model=structured_output_model)
     claim_source_df = get_claim_sources(chunk_claims_df[['claim_id', 'claim']])
+    edge_list = create_edge_list(chunk_claims_df, claim_source_df)
 
-    return chunk_claims_df, claim_source_df
+    return chunk_claims_df, claim_source_df, edge_list
 
 
 if __name__ == '__main__':
     articles_pd = pd.DataFrame(
         {
-            'resource_id': [1],
+            'source_id': [1],
             'timestamp': ['20250824151500'],
             'language': ['en'],
             'url': ['https://www.middleeasteye.net/news/poll-finds-60-percent-americans-oppose-military-aid-israel'],
         }
     )
 
-    chunk_claims_df, claim_source_df = main(articles_pd, claim_model='mistral:7b')
+    chunk_claims_df, claim_source_df, edge_list = main(articles_pd, claim_model='mistral:7b')
     chunk_claims_df.to_csv('chunk_claims.csv', index=False)
     claim_source_df.to_csv('claim_sources.csv', index=False)
+    edge_list.to_csv('edge_list.csv', index=False)
