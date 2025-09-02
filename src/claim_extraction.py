@@ -10,7 +10,11 @@ from ollama import chat
 from pydantic import BaseModel, ValidationError
 
 from src.gdelt_api_client import full_text_search
-from src.prompts import CLAIM_EXTRACTION_PROMPT, CLAIM_EXTRACTION_SYSTEM_PROMPT, STRUCTURED_OUTPUT_PROMPT
+from src.prompts import (
+    CLAIM_EXTRACTION_PROMPT,
+    CLAIM_EXTRACTION_SYSTEM_PROMPT,
+    STRUCTURED_OUTPUT_PROMPT,
+)
 from src.pydantic_models.gdelt_api_params import (
     FullTextSearchParams,
     FullTextSearchQueryCommands,
@@ -115,15 +119,14 @@ def get_claim_sources(claim_df: pd.DataFrame) -> pd.DataFrame:
 
     return claim_df_copy_exploded.drop(columns=['source_tuples'])
 
-def create_edge_list(
-        chunk_claims_df: pd.DataFrame,
-        claim_source_df: pd.DataFrame
-    ) -> pd.DataFrame:
-    joint_df = pd.merge(chunk_claims_df, claim_source_df,on='claim_id', how='inner', suffixes=('_source', '_target'))
+
+def create_edge_list(chunk_claims_df: pd.DataFrame, claim_source_df: pd.DataFrame) -> pd.DataFrame:
+    joint_df = pd.merge(chunk_claims_df, claim_source_df, on='claim_id', how='inner', suffixes=('_source', '_target'))
     joint_df = joint_df[['source_id_source', 'source_id_target', 'claim_id', 'claim_source', 'url_target']]
-    joint_df = joint_df[joint_df['source_id_target'] != 0] # TODO: Handle cases where source_id_target is 0
+    joint_df = joint_df[joint_df['source_id_target'] != 0]  # TODO: Handle cases where source_id_target is 0
     joint_df['claim_info'] = list(zip(joint_df['claim_id'], joint_df['claim_source']))
     return joint_df
+
 
 def _fetch_source_html(url: str) -> str:
     response = requests.get(url)
