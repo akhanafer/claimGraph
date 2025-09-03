@@ -1,0 +1,2 @@
+class GDELTAPIRequestError(Exception):
+    pass

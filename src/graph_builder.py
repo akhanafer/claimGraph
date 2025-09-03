@@ -17,7 +17,7 @@ def claim_graph_builder(edge_list):
 
 
 if __name__ == '__main__':
-    edge_list = pd.read_csv("adjacency_matrix.csv")
+    edge_list = pd.read_csv("edge_list.csv")
     G = claim_graph_builder(edge_list)
 
     # Get positions for nodes

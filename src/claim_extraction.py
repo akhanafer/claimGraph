@@ -19,6 +19,7 @@ from src.pydantic_models.gdelt_api_params import (
     FullTextSearchParams,
     FullTextSearchQueryCommands,
 )
+from src.utils import log_event
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -31,7 +32,7 @@ class TextPassage(BaseModel):
 
 def get_text_from_source(content_source_df: pd.DataFrame, keep_html_col: bool = False) -> pd.DataFrame:
     content_text_df = content_source_df.copy()
-    content_text_df['raw_html'] = content_text_df['url'].apply(_fetch_source_html)
+    content_text_df['raw_html'] = content_text_df['url'].apply(_fetch_source_html)  # TODO: How to deal with failed HTML requests
     content_text_df['content_text'] = content_text_df['raw_html'].apply(_extract_text_from_html)
     if not keep_html_col:
         content_text_df = content_text_df.drop(columns=['raw_html'])
@@ -39,6 +40,7 @@ def get_text_from_source(content_source_df: pd.DataFrame, keep_html_col: bool = 
 
 
 def chunk_text(text_df: pd.DataFrame, chunk_size: int, chunk_overlap: int) -> pd.DataFrame:
+    log_event(logger, logging.INFO, 'Chunking text', chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
     text_df_copy = text_df.copy()
@@ -58,6 +60,14 @@ def get_chunk_claims(
     claim_model: str = 'gpt-oss:20b',
     structured_output_model: Optional[str] = None,  # Needed for models that don't support structured output
 ) -> TextPassage:
+    log_event(
+        logger,
+        logging.INFO,
+        'Extracting claims from chunks',
+        claim_model=claim_model,
+        structured_output_model=structured_output_model,
+    )
+
     def extract_claims_from_chunk(chunk: str) -> List[Tuple[str, str]]:
         response = chat(
             messages=[
@@ -85,7 +95,7 @@ def get_chunk_claims(
         try:
             passage_claims = TextPassage.model_validate_json(response.message.content).claims
         except ValidationError as e:
-            logger.error(f'Error parsing model response: {e}')
+            log_event(logger, logging.ERROR, 'Error parsing model response', error=str(e), response=response.message.content)
             raise e
 
         return [(uuid4().hex, claim) for claim in passage_claims]
@@ -105,15 +115,14 @@ def get_claim_sources(claim_df: pd.DataFrame) -> pd.DataFrame:
         sources_df = full_text_search(
             url_parameters=FullTextSearchParams(query=claim), query_commands=FullTextSearchQueryCommands()
         )
-        sources_list = sources_df[['formatted_query', 'url']].values.tolist()
-        id_resource_pair = [(uuid4().hex, url, formatted_query) for formatted_query, url in sources_list]
-        return_value = id_resource_pair if len(id_resource_pair) > 0 else [(0, '', '')]
-        return return_value
+        sources_list = sources_df[['warning', 'formatted_query', 'url']].values.tolist()
+        id_resource_pair = [(uuid4().hex, url, formatted_query, warning) for warning, formatted_query, url in sources_list]
+        return id_resource_pair
 
     claim_df_copy = claim_df.copy()
     claim_df_copy['source_tuples'] = claim_df_copy['claim'].apply(_perform_full_text_search)
     claim_df_copy_exploded = claim_df_copy.explode('source_tuples').reset_index(drop=True)
-    claim_df_copy_exploded[['source_id', 'url', 'formatted_query']] = pd.DataFrame(
+    claim_df_copy_exploded[['source_id', 'url', 'formatted_query', 'warning']] = pd.DataFrame(
         claim_df_copy_exploded['source_tuples'].tolist(), index=claim_df_copy_exploded.index
     )
 
@@ -129,11 +138,13 @@ def create_edge_list(chunk_claims_df: pd.DataFrame, claim_source_df: pd.DataFram
 
 
 def _fetch_source_html(url: str) -> str:
-    response = requests.get(url)
-    if response.status_code == 200:
-        return response.text
-    logger.error(f'Error fetching source HTML: {response.status_code}')
-    return ''
+    try:
+        log_event(logger, logging.INFO, 'Fetching source HTML %s', url=url)
+        response = requests.get(url)
+    except requests.RequestException as e:
+        log_event(logger, logging.EXCEPTION, 'Failed to fetch source HTML', error=str(e), url=url)
+        return ''
+    return response.text
 
 
 def _extract_text_from_html(raw_html: str) -> str:
