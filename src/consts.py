@@ -1,3 +1,5 @@
 TIMESTAMP_COL = 'timestamp'
 LANGUAGE_COL = 'language'
 URL_COL = 'url'
+NO_RESULTS_WARNING = 'No_Results'
+GDELT_API_ERROR = 'GDELT_API_Error'

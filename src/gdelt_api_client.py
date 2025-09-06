@@ -1,10 +1,12 @@
 import io
 import logging
+from typing import Dict, List, Optional
 
 import pandas as pd
 import requests
 from ollama import chat
 
+from src.consts import GDELT_API_ERROR, NO_RESULTS_WARNING
 from src.exceptions import GDELTAPIRequestError
 from src.prompts import FORMAT_QUERY_PROMPT, FORMAT_QUERY_SYSTEM_PROMPT
 from src.pydantic_models.gdelt_api_params import (
@@ -19,7 +21,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
-def full_text_search(url_parameters: FullTextSearchParams, query_commands: FullTextSearchQueryCommands) -> pd.DataFrame:
+def full_text_search(
+    url_parameters: FullTextSearchParams,
+    query_commands: FullTextSearchQueryCommands,
+    retry_prompt: Optional[List[Dict[str, str]]] = [],
+) -> pd.DataFrame:
     log_event(
         logger,
         logging.INFO,
@@ -28,47 +34,112 @@ def full_text_search(url_parameters: FullTextSearchParams, query_commands: FullT
         query_commands=query_commands.model_dump(),
     )
 
-    formatted_query = format_query(url_parameters.query)
-    query = _construct_query(query=formatted_query, query_commands=query_commands).strip()
-
-    url_parameters.query = query
+    gdelt_query = _convert_text_to_gdelt_query_format(url_parameters.query, retry_prompt=retry_prompt)
+    query_with_commands = _add_query_commands_to_gdelt_query(query=gdelt_query, query_commands=query_commands).strip()
+    request_parameters = url_parameters.model_copy(update={'query': query_with_commands})
 
     try:
-        response = requests.get(url=GDELT_FULL_TEXT_SEARCH_BASE_URL, params=url_parameters.model_dump().items())
+        response = requests.get(url=GDELT_FULL_TEXT_SEARCH_BASE_URL, params=request_parameters.model_dump().items())
     except requests.RequestException as e:
-        log_event(logger, logging.ERROR, 'GDELT API request failed %s', error=str(e), final_query=query)
-        raise GDELTAPIRequestError(f"GDELT API request failed: {e}")
-
-    log_event(logger, logging.INFO, 'GDELT API response %s', response_text=response.text, url=response.url)
-    response_text = response.text
-    response_csv = io.StringIO(response_text)
-    response_pdf = pd.read_csv(response_csv, skiprows=1, names=['url', 'mobile_url', 'date', 'title']).drop(
-        columns=['mobile_url']
-    )
-
-    if response_pdf.empty:
         log_event(
             logger,
-            logging.WARNING,
-            'GDELT Full Text Search returned no results %s',
-            url=response.url,
-            response_content=response.text,
+            logging.ERROR,
+            'GDELT API request failed %s',
+            error=str(e),
         )
-        response_pdf = pd.DataFrame(
-            {'url': [None], 'date': [None], 'title': [None], 'formatted_query': [formatted_query], 'warning': [response_text]}
+        raise GDELTAPIRequestError(f"GDELT API request failed: {e}")
+
+    log_event(
+        logger,
+        logging.INFO,
+        'GDELT API request completed with no error',
+        status_code=response.status_code,
+        url=response.url,
+        query=url_parameters.query,
+    )
+    return _process_response(response=response, query_with_commands=query_with_commands, query_without_commands=gdelt_query)
+
+
+def _process_response(response: requests.Response, query_with_commands: str, query_without_commands: str) -> pd.DataFrame:
+    content_type = response.headers.get('Content-Type', '').lower()
+    is_csv = 'text/csv' in content_type or 'application/csv' in content_type or 'text/plain' in content_type
+    if not is_csv:
+        log_event(logger, logging.WARNING, 'GDELT Full Text Search returned no results', content_type=content_type)
+        return _create_error_result(query_with_commands, query_without_commands, f'{GDELT_API_ERROR}: {response.text}')
+
+    try:
+        response_csv = io.StringIO(response.text)
+        response_pdf = pd.read_csv(response_csv, skiprows=1, names=['url', 'mobile_url', 'date', 'title']).drop(
+            columns=['mobile_url']
         )
 
-    else:
-        response_pdf['formatted_query'] = formatted_query
-        response_pdf['warning'] = ''
-    return response_pdf
+        if not response_pdf.empty:
+            log_event(
+                logger,
+                logging.INFO,
+                'GDELT Full Text Search successful and returned results',
+            )
+            response_pdf['query_with_commands'] = query_with_commands
+            response_pdf['query_without_commands'] = query_without_commands
+            response_pdf['warning'] = ''
+            return response_pdf
+        else:
+            log_event(
+                logger,
+                logging.WARNING,
+                'GDELT Full Text Search successful but found no results',
+            )
+            return _create_empty_result(query_with_commands, query_without_commands, NO_RESULTS_WARNING)
+    except pd.errors.ParserError as e:
+        log_event(
+            logger,
+            logging.ERROR,
+            'Failed to parse GDELT Full Text Search response',
+            error=str(e),
+        )
+        raise pd.errors.ParserError(f"Failed to parse GDELT Full Text Search response: {e}")
+    except Exception as e:
+        log_event(logger, logging.ERROR, f'Unexpected error parsing response: {e}')
+        raise Exception(f"Unexpected error parsing response: {e}")
 
 
-def format_query(query: str, model: str = 'mistral:7b') -> str:
+def _create_empty_result(query_with_commands: str, query_without_commands: str, warning: str) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            'url': [None],
+            'date': [None],
+            'title': [None],
+            'query_with_commands': [query_with_commands],
+            'query_without_commands': [query_without_commands],
+            'warning': [warning],
+        }
+    )
+
+
+def _create_error_result(query_with_commands: str, query_without_commands: str, error_text: str) -> pd.DataFrame:
+    """Create DataFrame for error responses."""
+    return pd.DataFrame(
+        {
+            'url': [None],
+            'date': [None],
+            'title': [None],
+            'query_with_commands': [query_with_commands],
+            'query_without_commands': [query_without_commands],
+            'warning': [error_text],
+        }
+    )
+
+
+def _convert_text_to_gdelt_query_format(
+    query: str, model: str = 'mistral:7b', retry_prompt: Optional[List[Dict[str, str]]] = []
+) -> str:
+    if retry_prompt:
+        log_event(logger, logging.INFO, 'Retrying GDELT query formatting with additional prompt', retry_prompt=retry_prompt)
     response = chat(
         messages=[
             {'role': 'system', 'content': FORMAT_QUERY_SYSTEM_PROMPT},
             {'role': 'user', 'content': FORMAT_QUERY_PROMPT.format(claim=query)},
+            *retry_prompt,
         ],
         model=model,
     ).message.content
@@ -78,7 +149,7 @@ def format_query(query: str, model: str = 'mistral:7b') -> str:
     return response
 
 
-def _construct_query(query: str, query_commands: FullTextSearchQueryCommands) -> str:
+def _add_query_commands_to_gdelt_query(query: str, query_commands: FullTextSearchQueryCommands) -> str:
     final_query = f'{query} '
     for field, value in query_commands.model_dump().items():
         if value:

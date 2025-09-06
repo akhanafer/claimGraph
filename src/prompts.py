@@ -1,3 +1,5 @@
+from src.consts import GDELT_API_ERROR, NO_RESULTS_WARNING
+
 CLAIM_EXTRACTION_SYSTEM_PROMPT = '''
 You are an agent that is responsible for extracting checkable and relevant claims from passages of text.
 A claim must adhere to the criteria bellow:
@@ -108,4 +110,17 @@ Here is the claim:
 STRUCTURED_OUTPUT_PROMPT = '''
 You are simply responsible for getting the subject
 and claim from the provided text to comply with the output format given to you.
+'''
+
+FORMAT_QUERY_RETRY_PROMPT = f'''
+I tried this query and got the following warning: {{warning}}
+
+Here's a list of the possible warning and what they mean:
+
+* {NO_RESULTS_WARNING}: The query was properly formatted and GDELT returned a result
+but it couldn't find any relevant URLs for this query.
+
+* {GDELT_API_ERROR}: The query you produced was not properly formatted for the reson specified
+
+Knowing this, try to rewrite the query
 '''
