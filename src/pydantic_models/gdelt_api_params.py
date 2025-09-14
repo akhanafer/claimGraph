@@ -9,7 +9,12 @@ class FullTextSearchQueryCommands(BaseModel):
         description='This allows you to restrict your search to a particular news outlet.'
         'Specifying an outlet like “cnn.com” will return only matching coverage from CNN',
     )
-
+    domain_exclude: Optional[str] = Field(
+        default=None,
+        description='This allows you to exclude a particular news outlet from your search.'
+        'Specifying an outlet like “cnn.com” will return matching coverage from all outlets'
+        'except CNN',
+    )
     sourcelang: Literal['english', 'french'] = Field(default='english')
     theme: Optional[str] = Field(
         default=None,

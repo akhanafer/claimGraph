@@ -35,12 +35,15 @@ def apply_and_explode(df: pd.DataFrame, column: str, func: Callable, new_columns
     df_copy = df.copy()
     df_copy['info_tuple'] = df_copy[column].apply(func)
     df_exploded = df_copy.explode('info_tuple').reset_index(drop=True)
+    if df_exploded.empty:  # If the exploded DataFrame is empty e.g., no HTML fetched
+        return pd.DataFrame(columns=df.columns.tolist() + new_columns)
     df_exploded[new_columns] = pd.DataFrame(df_exploded['info_tuple'].tolist(), index=df_exploded.index)
     return df_exploded.drop(columns=['info_tuple'])
 
 
 def get_text_from_source(content_source_df: pd.DataFrame, keep_html_col: bool = False) -> pd.DataFrame:
     content_text_df = content_source_df.copy()
+    content_text_df = content_text_df.dropna(subset=['url'])  # Happens when no sources found
     content_text_df['raw_html'] = content_text_df['url'].apply(_fetch_source_html)  # TODO: How to deal with failed HTML requests
     content_text_df['content_text'] = content_text_df['raw_html'].apply(_extract_text_from_html)
     if not keep_html_col:
@@ -110,13 +113,13 @@ def get_chunk_claims(
 
 
 def get_claim_sources(claim_df: pd.DataFrame) -> pd.DataFrame:
-    def _perform_full_text_search(claim: str, max_retry: int = 3) -> List[Tuple[str, str]]:
+    def _perform_full_text_search(claim: str, max_retry: int = 1) -> List[Tuple[str, str]]:
         retry_count = 0
         retry_prompt = []
         while retry_count < max_retry:
             sources_df = full_text_search(
-                url_parameters=FullTextSearchParams(query=claim),
-                query_commands=FullTextSearchQueryCommands(),
+                url_parameters=FullTextSearchParams(query=claim, maxrecords=1),
+                query_commands=FullTextSearchQueryCommands(domain_exclude='middleeasteye.net'),
                 retry_prompt=retry_prompt,
             )
             need_retry = sources_df['warning'].iloc[0] != ''
@@ -162,7 +165,7 @@ def _fetch_source_html(url: str) -> str:
         log_event(logger, logging.INFO, 'Fetching source HTML %s', url=url)
         response = requests.get(url)
     except requests.RequestException as e:
-        log_event(logger, logging.EXCEPTION, 'Failed to fetch source HTML', error=str(e), url=url)
+        log_event(logger, logging.ERROR, 'Failed to fetch source HTML', error=str(e), url=url)
         return ''
     return response.text
 
@@ -178,21 +181,59 @@ def _extract_text_from_html(raw_html: str) -> str:
     return text
 
 
-def main(
-    content_source_df: pd.DataFrame,
+def process_single_row(
+    series: pd.Series,
     claim_model: str = 'gpt-oss:20b',
     structured_output_model: Optional[str] = None,
     chunk_size: int = 1000,
     chunk_overlap: int = 100,
-) -> pd.DataFrame:
-
-    text_df = get_text_from_source(content_source_df)
+) -> tuple:
+    log_event(logger, logging.INFO, 'Processing single row', source_id=series['source_id'], url=series['url'])
+    text_df = get_text_from_source(pd.DataFrame([series]))
     text_chunks_df = chunk_text(text_df, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     chunk_claims_df = get_chunk_claims(text_chunks_df, claim_model=claim_model, structured_output_model=structured_output_model)
     claim_source_df = get_claim_sources(chunk_claims_df[['claim_id', 'claim']])
     edge_list = create_edge_list(chunk_claims_df, claim_source_df)
 
-    return chunk_claims_df, claim_source_df, edge_list
+    return edge_list, claim_source_df
+
+
+def loop(
+    content_source_df: pd.DataFrame,
+    claim_model: str = 'gpt-oss:20b',
+    structured_output_model: Optional[str] = None,
+    chunk_size: int = 1000,
+    chunk_overlap: int = 100,
+):
+    results = content_source_df.apply(
+        lambda row: process_single_row(
+            row,
+            claim_model=claim_model,
+            structured_output_model=structured_output_model,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        ),
+        axis=1,
+    )
+
+    edge_lists = [result[0] for result in results]
+    claim_source_dfs = [result[1] for result in results]
+
+    return pd.concat(claim_source_dfs, ignore_index=True), pd.concat(edge_lists, ignore_index=True)
+
+
+def main(content_source_df: pd.DataFrame, hops: int = 2) -> pd.DataFrame:
+    edge_lists = []
+    for _ in range(hops):
+        claim_source_df, edge_list = loop(
+            content_source_df=content_source_df,
+            claim_model='mistral:7b',
+        )
+        content_source_df = claim_source_df[['source_id', 'url']]
+        edge_lists.append(edge_list)
+        log_event(logger, logging.INFO, 'Completed hop', new_edges=len(edge_list))
+
+    return pd.concat(edge_lists, ignore_index=True)
 
 
 if __name__ == '__main__':
@@ -205,7 +246,5 @@ if __name__ == '__main__':
         }
     )
 
-    chunk_claims_df, claim_source_df, edge_list = main(articles_pd, claim_model='mistral:7b')
-    chunk_claims_df.to_csv('chunk_claims.csv', index=False)
-    claim_source_df.to_csv('claim_sources.csv', index=False)
-    edge_list.to_csv('edge_list.csv', index=False)
+    edge_list = main(articles_pd, hops=2)
+    edge_list.to_csv('edge_list_2_hop.csv', index=False)

@@ -17,7 +17,7 @@ from src.utils import log_event
 
 GDELT_FULL_TEXT_SEARCH_BASE_URL = 'https://api.gdeltproject.org/api/v2/doc/doc?'
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", filename='app.log')
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
@@ -153,7 +153,11 @@ def _add_query_commands_to_gdelt_query(query: str, query_commands: FullTextSearc
     final_query = f'{query} '
     for field, value in query_commands.model_dump().items():
         if value:
-            final_query += f'{field}:{value} '
+            if '_exclude' in field:
+                field = field.replace('_exclude', '')
+                final_query += f'-{field}:{value} '
+            else:
+                final_query += f'{field}:{value} '
 
     return final_query
 
