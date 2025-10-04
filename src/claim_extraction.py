@@ -36,6 +36,61 @@ class TextPassage(BaseModel):
 def apply_and_explode(
     df: pd.DataFrame, column: str, func: Callable[[Any], List[Tuple]], new_columns: List[str], **kwargs
 ) -> pd.DataFrame:
+    '''
+    Applies function to each row in df for the specified column then explodes
+
+    This function applies the given function `func` tto each entry in the specified `column` of the DataFrame `df`.
+    The function is expected to return a list of tuples. The DataFrame is then exploded based on these tuples,
+    and the tuples are split into separate columns as specified in `new_columns`.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The dataframe to process.
+    column : str
+        The name of the column in `df` to which `func` will be applied.
+    func : Callable[[Any], List[Tuple]]
+        A function that takes a single argument (the value from the specified column) and returns a list of tuples.
+    new_columns : List[str]
+        A list of new column names to create from the elements of the tuples returned by `func`.
+    **kwargs : dict
+        Additional keyword arguments to pass to `func`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A new DataFrame with the exploded tuples split into separate columns.
+
+    Raises
+    ------
+    KeyError
+        If the specified `column` does not exist in `df`.
+    ValueError
+        If `df` is empty.
+        If any of the `new_columns` already exist in `df`.
+        If the length of the tuples returned by `func` does not match the length of `new_columns`.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> data = {'number': [1, 2, 3]}
+    >>> df = pd.DataFrame(data)
+    >>> def exponents(x):
+    ...     return [(i, x**i) for i in range(1, 4)]
+    >>> new_columns = ['exponent', 'result']
+    >>> result = apply_and_explode(df, 'number', exponents, new_columns)
+    >>> print(result)
+         number  exponent  result
+    0       1         1       1
+    1       1         2       1
+    2       1         3       1
+    3       2         1       2
+    4       2         2       4
+    5       2         3       8
+    6       3         1       3
+    7       3         2       9
+    8       3         3      27
+    '''
     df_copy = df.copy()
     if column not in df_copy.columns:
         raise KeyError(f"Column '{column}' does not exist in DataFrame.")
@@ -57,17 +112,69 @@ def apply_and_explode(
 
 
 def get_text_from_source(source: str) -> str:
+    '''
+    Fetches and extracts text content from the given source URL.
+
+    Parameters
+    ----------
+    source : str
+        The URL of the source from which to fetch and extract text.
+
+    Returns
+    -------
+    str
+        The extracted text content with no HTML tags.
+
+    Raises
+    ------
+    ValueError
+        If the input source URL is empty.
+    '''
     log_event(logger, logging.INFO, 'Getting text from source URL', source=source)
     raw_html = _fetch_source_html(source)
-    log_event(logger, logging.INFO, 'Fetched raw HTML content', length=raw_html)
     content_text = _extract_text_from_html(raw_html)
     return content_text
 
 
 def chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> pd.DataFrame:
-    log_event(logger, logging.INFO, 'Chunking text', chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    '''
+    Chunks the input text into smaller segments for processing.
+
+    Parameters
+    ----------
+    text : str
+        The input text to chunk.
+    chunk_size : int
+        The size of each chunk.
+    chunk_overlap : int
+        The overlap between chunks.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing the text chunks. Each row represents a chunk with columns 'chunk_id' and 'chunk'.
+
+    Raises
+    ------
+    ValueError
+        If the input text is empty.
+
+    Examples
+    --------
+    >>> chunk_text("This is a test article. It contains multiple sentences.", chunk_size=10, chunk_overlap=2)
+         chunk_id           chunk
+    0  e4b8f8c9e1f14c3a  This is a
+    1  9f1c3e4b8fc9e1f1  a test ar
+    2  1f4c3a9f1c3e4b8  test article.
+    3  c3e4b8e4b8f8c9e  article. It
+    4  b8f8c9e1f4c3a9f  It contains
+    5  f8c9e1f4c3a9f1c  contains multiple
+    6  e1f4c3a9f1c3e4b  multiple sentences.
+    '''
     if not text:
         raise ValueError("Chunk Text Input is empty.")
+
+    log_event(logger, logging.INFO, 'Chunking text', chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
     def recursive_text_split(text: str) -> List[Tuple[str, str]]:
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
@@ -84,12 +191,59 @@ def get_chunk_claims(
     claim_model: str = 'gpt-oss:20b',
     structured_output_model: Optional[str] = None,  # Needed for models that don't support structured output
 ) -> pd.DataFrame:
+    '''
+    Extracts claims from text chunks using a language model.
+
+    Parameters
+    ----------
+    chunk_df : pd.DataFrame
+        A DataFrame containing the text chunks to process. Must contain `chunk` and `chunk_id` columns.
+    claim_model : str
+        The model to use for claim extraction.
+    structured_output_model : Optional[str]
+        The model to use for structured output (if needed).
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing the extracted claims from each chunk.
+        Each row represents a claim with columns 'chunk_id', 'chunk', 'claim_id', and 'claim'.
+
+    Raises
+    ------
+    KeyError
+        If the required columns are missing in `chunk_df`.
+    ValueError
+        If `chunk_df` is empty.
+        If there is an error parsing the model response.
+    PydanticValidationError
+        If there is an error validating the model response.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> data = {
+    ...     'chunk_id': ['1', '2'],
+    ...     'chunk': [
+    ...         'This is chunk one with claim one and claim two.',
+    ...         'This is chunk two with claim one.'
+    ...     ]}
+    >>> chunk_df = pd.DataFrame(data)
+    >>> claims_df = get_chunk_claims(chunk_df, claim_model='gpt-oss:20b')
+    >>> print(claims_df)
+        chunk_id           chunk                                    claim_id        claim
+    0       1      This is chunk one with claim one and claim two.   abc123       Claim one.
+    1       1      This is chunk one with claim one and claim two.   def456       Claim two.
+    2       2      This is chunk two with claim one.                 ghi789       Claim one.
+
+    '''
     log_event(
         logger,
         logging.INFO,
         'Extracting claims from chunks',
         claim_model=claim_model,
         structured_output_model=structured_output_model,
+        num_chunks=len(chunk_df),
     )
     if 'chunk' not in chunk_df.columns:
         raise KeyError("Column 'chunk' does not exist in DataFrame.")
@@ -137,6 +291,49 @@ def get_chunk_claims(
 
 
 def get_claim_sources(claim_df: pd.DataFrame, max_retry: int = 1) -> pd.DataFrame:
+    '''
+    Get the sources for each claim in the DataFrame.
+    Parameters
+    ----------
+    claim_df : pd.DataFrame
+        A DataFrame containing the claims to search for sources. Must contain `claim` and `claim_id` columns.
+    max_retry : int
+        The maximum number of retries for the full text search in case of warnings or errors in trying to find a source.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing the sources for each claim.
+        Each row represents a claim with columns:
+        'claim_id',
+        'claim',
+        'source_id',
+        'url': The URL of the source,
+        'query_with_commands': the GDELT query used with commands,
+        'query_without_commands': The  GDELT query used without commands,
+        'warning': Any warning messages, typically from the GDELT API when trying to find a source.
+            Typically indicates that the query does not comply with GDELT's interface or that no results were found.
+
+    Raises
+    ------
+    KeyError
+        If the required columns are missing in `claim_df`.
+    ValueError
+        If `claim_df` is empty.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> data = {'claim_id': ['1', '2'], 'claim': ['Claim one', 'Claim two']}
+    >>> claim_df = pd.DataFrame(data)
+    >>> sources_df = get_claim_sources(claim_df, max_retry=1)
+    >>> print(sources_df)
+        claim_id    claim       source_id       url                                     query_with_commands  query_without_commands  warning # noqa E501
+    0       1   Claim one       abc123         http://example.com/source1   ...                     ...                     ... # noqa E501
+    1       2   Claim two       def456         http://example.com/source2   ...                     ...                     ... # noqa E501
+
+    '''
+
     def _perform_full_text_search(claim: str, max_retry: int) -> List[Tuple[str, str]]:
         retry_count = 0
         retry_prompt = []
@@ -179,6 +376,43 @@ def get_claim_sources(claim_df: pd.DataFrame, max_retry: int = 1) -> pd.DataFram
 
 
 def create_edge_list(chunk_claims_df: pd.DataFrame, claim_source_df: pd.DataFrame) -> pd.DataFrame:
+    '''
+    Create an edge list DataFrame mapping the relationships between original content sources and new claim sources.
+
+    Parameters
+    ----------
+    chunk_claims_df : pd.DataFrame
+        A DataFrame containing chunk claims with columns `source_id`, `claim_id`, and `claim`.
+         Source_id is the source from which the claim was originally extracted.
+    claim_source_df : pd.DataFrame
+        A DataFrame containing claim sources with columns `claim_id`,`source_id` and `url`.
+            Source_id is the new source where the original claim was also found.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing the edge list with columns:
+        'source_id_source': The source ID of the original content source.
+        'source_id_target': The source ID of the new source where this claim was also found.
+        'claim_id': The unique identifier for the claim.
+        'claim': The text of the claim.
+        'url': The URL of the new claim source.
+        'claim_info': A tuple containing (claim_id, claim) for easy reference.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> chunk_claims_data = {'chunk_id': ['1', '2'], 'chunk': ['This is chunk one.', 'This is chunk two.'], 'claim_id': ['c1', 'c2'], 'claim': ['Claim one', 'Claim two'], 'source_id': [1, 1]} # noqa E501
+    >>> claim_source_data = {'claim_id': ['c1', 'c2'], 'claim': ['Claim one', 'Claim two'], 'source_id': [2, 3], 'url': ['http://example.com/source1', 'http://example.com/source2']} # noqa E501
+    >>> chunk_claims_df = pd.DataFrame(chunk_claims_data)
+    >>> claim_source_df = pd.DataFrame(claim_source_data)
+    >>> edge_list_df = create_edge_list(chunk_claims_df, claim_source_df)
+    >>> print(edge_list_df)
+                source_id_source  source_id_target            claim_id      claim                          url                         claim_info # noqa E501
+    0                 1                 2                       c1          Claim one           http://example.com/source1             (c1, Claim one) # noqa E501
+    1                 1                 3                       c2          Claim two           http://example.com/source2             (c2, Claim two) # noqa E501
+
+    '''
     joint_df = pd.merge(chunk_claims_df, claim_source_df, on='claim_id', how='inner', suffixes=('_source', '_target'))
     joint_df = joint_df[['source_id_source', 'source_id_target', 'claim_id', 'claim', 'url']]
     joint_df['claim_info'] = list(zip(joint_df['claim_id'], joint_df['claim']))
@@ -189,6 +423,18 @@ def _fetch_source_html(url: str) -> str:
     try:
         log_event(logger, logging.INFO, 'Fetching source HTML %s', url=url)
         response = requests.get(url)
+        log_event(logger, logging.INFO, 'Fetched source HTML', status_code=response.status_code, url=url)
+        response.raise_for_status()
+    except requests.HTTPError as e:
+        log_event(
+            logger,
+            logging.ERROR,
+            'HTTP error occurred while fetching source HTML',
+            status_code=e.response.status_code,
+            error=str(e),
+            url=url,
+        )
+        return ''
     except requests.RequestException as e:
         log_event(logger, logging.ERROR, 'Failed to fetch source HTML', error=str(e), url=url)
         return ''
@@ -206,7 +452,7 @@ def _extract_text_from_html(raw_html: str) -> str:
     return text
 
 
-def process_single_row(
+def create_source_claim_graph(
     series: pd.Series,
     claim_model: str = 'gpt-oss:20b',
     structured_output_model: Optional[str] = None,
@@ -216,7 +462,13 @@ def process_single_row(
     log_event(logger, logging.INFO, 'Processing single row', source_id=series['source_id'], url=series['url'])
     text = get_text_from_source(series['url'])
     if not text:
-        log_event(logger, logging.WARNING, 'No text extracted from source URL', source_id=series['source_id'], url=series['url'])
+        log_event(
+            logger,
+            logging.WARNING,
+            'No text extracted from source URL, skipping',
+            source_id=series['source_id'],
+            url=series['url'],
+        )
         return pd.DataFrame(), pd.DataFrame()
     text_chunks_df = chunk_text(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     text_chunks_df['source_id'] = series['source_id']
@@ -235,10 +487,10 @@ def loop(
     chunk_size: int = 1000,
     chunk_overlap: int = 100,
 ):
-    # Don't loop on rows with no URL to avoid unnecessary costs and runtime
+    # Don't loop on rows with no URL to avoid unnecessary LLM requests and runtime
     content_source_df = content_source_df.dropna(subset=['url'])
     results = content_source_df.apply(
-        lambda row: process_single_row(
+        lambda row: create_source_claim_graph(
             row,
             claim_model=claim_model,
             structured_output_model=structured_output_model,
@@ -273,8 +525,6 @@ if __name__ == '__main__':
     articles_pd = pd.DataFrame(
         {
             'source_id': [1],
-            'timestamp': ['20250824151500'],
-            'language': ['en'],
             'url': ['https://www.middleeasteye.net/news/poll-finds-60-percent-americans-oppose-military-aid-israel'],
         }
     )
