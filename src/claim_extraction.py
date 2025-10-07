@@ -372,10 +372,15 @@ def get_claim_sources(claim_df: pd.DataFrame, max_retry: int = 1) -> pd.DataFram
         ['source_id', 'url', 'query_with_commands', 'query_without_commands', 'warning'],
         max_retry=max_retry,
     )
+    claim_df_exploded['domain'] = claim_df_exploded['url'].apply(
+        lambda x: requests.utils.urlparse(x).netloc if pd.notna(x) else None
+    )
     return claim_df_exploded
 
 
-def create_edge_list(chunk_claims_df: pd.DataFrame, claim_source_df: pd.DataFrame) -> pd.DataFrame:
+def create_edge_lists(
+    chunk_claims_df: pd.DataFrame, claim_source_df: pd.DataFrame, source_to_source=True, source_to_claim=True
+) -> pd.DataFrame:
     '''
     Create an edge list DataFrame mapping the relationships between original content sources and new claim sources.
 
@@ -413,10 +418,17 @@ def create_edge_list(chunk_claims_df: pd.DataFrame, claim_source_df: pd.DataFram
     1                 1                 3                       c2          Claim two           http://example.com/source2             (c2, Claim two) # noqa E501
 
     '''
-    joint_df = pd.merge(chunk_claims_df, claim_source_df, on='claim_id', how='inner', suffixes=('_source', '_target'))
-    joint_df = joint_df[['source_id_source', 'source_id_target', 'claim_id', 'claim', 'url']]
-    joint_df['claim_info'] = list(zip(joint_df['claim_id'], joint_df['claim']))
-    return joint_df
+    source_to_source_edge_list = pd.merge(
+        chunk_claims_df, claim_source_df, on='claim_id', how='inner', suffixes=('_source', '_target')
+    )
+
+    source_to_claim_edge_list = pd.concat(
+        [
+            chunk_claims_df[['source_id', 'url', 'domain', 'claim_id', 'claim']],
+            claim_source_df[['source_id', 'url', 'domain', 'claim_id', 'claim']],
+        ]
+    ).reset_index(drop=True)
+    return source_to_source_edge_list, source_to_claim_edge_list
 
 
 def _fetch_source_html(url: str) -> str:
@@ -469,15 +481,16 @@ def create_source_claim_graph(
             source_id=series['source_id'],
             url=series['url'],
         )
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     text_chunks_df = chunk_text(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     text_chunks_df['source_id'] = series['source_id']
     text_chunks_df['url'] = series['url']
+    text_chunks_df['domain'] = requests.utils.urlparse(series['url']).netloc
     chunk_claims_df = get_chunk_claims(text_chunks_df, claim_model=claim_model, structured_output_model=structured_output_model)
     claim_source_df = get_claim_sources(chunk_claims_df[['claim_id', 'claim']])
-    edge_list = create_edge_list(chunk_claims_df['source_id', 'claim_id'], claim_source_df)
+    source_to_source_edge_list, source_to_claim_edge_list = create_edge_lists(chunk_claims_df, claim_source_df)
 
-    return edge_list, claim_source_df
+    return source_to_source_edge_list, source_to_claim_edge_list, claim_source_df
 
 
 def loop(
@@ -500,25 +513,33 @@ def loop(
         axis=1,
     )
 
-    edge_lists = [result[0] for result in results]
-    claim_source_dfs = [result[1] for result in results]
+    source_to_source_edge_list = [result[0] for result in results]
+    source_to_claim_edge_list = [result[1] for result in results]
+    claim_source_dfs = [result[2] for result in results]
 
-    return pd.concat(claim_source_dfs, ignore_index=True), pd.concat(edge_lists, ignore_index=True)
+    return (
+        pd.concat(source_to_source_edge_list, ignore_index=True),
+        pd.concat(source_to_claim_edge_list, ignore_index=True),
+        pd.concat(claim_source_dfs, ignore_index=True),
+    )
 
 
 def main(content_source_df: pd.DataFrame, hops: int = 2) -> pd.DataFrame:
-    edge_lists = []
+    source_to_source_edge_lists = []
+    source_to_claim_edge_lists = []
     for i in range(hops):
-        claim_source_df, edge_list = loop(
+
+        source_to_source_edge_list, source_to_claim_edge_list, claim_source_df = loop(
             content_source_df=content_source_df,
             claim_model='mistral:7b',
         )
+
         claim_source_df.to_csv(f'claim_sources_hop_{i}.csv', index=False)
         content_source_df = claim_source_df[['source_id', 'url']]
-        edge_lists.append(edge_list)
-        log_event(logger, logging.INFO, 'Completed hop', new_edges=len(edge_list))
+        source_to_source_edge_lists.append(source_to_source_edge_list)
+        source_to_claim_edge_lists.append(source_to_claim_edge_list)
 
-    return pd.concat(edge_lists, ignore_index=True)
+    return pd.concat(source_to_source_edge_lists, ignore_index=True), pd.concat(source_to_claim_edge_lists, ignore_index=True)
 
 
 if __name__ == '__main__':
@@ -529,5 +550,6 @@ if __name__ == '__main__':
         }
     )
 
-    edge_list = main(articles_pd, hops=2)
-    edge_list.to_csv('edge_list_2_hop.csv', index=False)
+    source_to_source_edge_list, source_to_claim_edge_list = main(articles_pd, hops=2)
+    source_to_source_edge_list.to_csv('source_to_source_edge_list_1_hop.csv', index=False)
+    source_to_claim_edge_list.to_csv('source_to_claim_edge_list_1_hop.csv', index=False)

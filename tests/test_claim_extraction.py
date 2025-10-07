@@ -6,7 +6,7 @@ import pytest
 from src.claim_extraction import (
     apply_and_explode,
     chunk_text,
-    create_edge_list,
+    create_edge_lists,
     get_chunk_claims,
     get_claim_sources,
     get_text_from_source,
@@ -19,9 +19,8 @@ from src.exceptions import PydanticValidationError
 def test_get_text_from_source(mock_extract_text, mock_fetch_html, mock_content_source_df):
     mock_fetch_html.return_value = '<p>Example HTML content</p>'
     mock_extract_text.return_value = 'Example text content'
-    result_df = get_text_from_source(mock_content_source_df)
-    assert 'content_text' in result_df.columns
-    assert result_df['content_text'][0] == 'Example text content'
+    result = get_text_from_source(mock_content_source_df)
+    assert result == 'Example text content'
 
 
 @pytest.mark.parametrize(
@@ -268,6 +267,7 @@ def test_get_chunk_claims(
                     'query_with_commands': ['query'],
                     'query_without_commands': ['query'],
                     'warning': [''],
+                    'domain': ['example.com'],
                 }
             ),
             None,
@@ -289,6 +289,7 @@ def test_get_chunk_claims(
                     'query_with_commands': ['query'],
                     'query_without_commands': ['query'],
                     'warning': ['No_Results'],
+                    'domain': [None],
                 }
             ),
             None,
@@ -315,6 +316,7 @@ def test_get_chunk_claims(
                     'query_with_commands': ['query'],
                     'query_without_commands': ['query'],
                     'warning': ['GDELT_API_Error'],
+                    'domain': [None],
                 }
             ),
             None,
@@ -339,46 +341,118 @@ def test_get_claim_sources(
 
 
 @pytest.mark.parametrize(
-    "chunk_claims_data, claim_source_data, expected_df",
+    "chunk_claims_data, claim_source_data, expected_source_to_source_df, expected_source_to_claim_df",
     [
         pytest.param(
-            {'source_id': [1], 'claim_id': ['claim123'], 'claim': ['Claim Text']},
-            {'claim_id': ['claim123'], 'source_id': [2], 'url': ['http://example.com']},
+            {
+                'source_id': [1],
+                'claim_id': ['claim123'],
+                'claim': ['Claim Text'],
+                'url': ['http://example1.com'],
+                'domain': ['example1.com'],
+            },
+            {
+                'claim_id': ['claim123'],
+                'claim': ['Claim Text'],
+                'source_id': [2],
+                'url': ['http://example2.com'],
+                'domain': ['example2.com'],
+            },
             pd.DataFrame(
                 {
                     'source_id_source': [1],
                     'source_id_target': [2],
                     'claim_id': ['claim123'],
-                    'claim': ['Claim Text'],
-                    'url': ['http://example.com'],
-                    'claim_info': [('claim123', 'Claim Text')],
+                    'claim_source': ['Claim Text'],
+                    'claim_target': ['Claim Text'],
+                    'url_source': ['http://example1.com'],
+                    'url_target': ['http://example2.com'],
+                    'domain_source': ['example1.com'],
+                    'domain_target': ['example2.com'],
+                }
+            ),
+            pd.DataFrame(
+                {
+                    'source_id': [1, 2],
+                    'url': ['http://example1.com', 'http://example2.com'],
+                    'domain': ['example1.com', 'example2.com'],
+                    'claim_id': ['claim123', 'claim123'],
+                    'claim': ['Claim Text', 'Claim Text'],
                 }
             ),
             id="Basic case with one match",
         ),
         pytest.param(
-            {'source_id': [1], 'claim_id': ['claim123'], 'claim': ['Claim Text']},
-            {'claim_id': ['claim456'], 'source_id': [2], 'url': ['http://example.com']},
+            {
+                'source_id': [1],
+                'claim_id': ['claim123'],
+                'claim': ['Claim Text'],
+                'url': ['http://example1.com'],
+                'domain': ['example1.com'],
+            },
+            {
+                'claim_id': ['claim456'],
+                'source_id': [2],
+                'url': ['http://example2.com'],
+                'domain': ['example2.com'],
+                'claim': ['Another Claim Text'],
+            },
             pd.DataFrame(
-                {'source_id_source': [], 'source_id_target': [], 'claim_id': [], 'claim': [], 'url': [], 'claim_info': []}
+                {
+                    'source_id_source': [],
+                    'source_id_target': [],
+                    'claim_id': [],
+                    'claim_source': [],
+                    'claim_target': [],
+                    'url_source': [],
+                    'url_target': [],
+                    'domain_source': [],
+                    'domain_target': [],
+                }
+            ),
+            pd.DataFrame(
+                {
+                    'source_id': [1, 2],
+                    'url': ['http://example1.com', 'http://example2.com'],
+                    'domain': ['example1.com', 'example2.com'],
+                    'claim_id': ['claim123', 'claim456'],
+                    'claim': ['Claim Text', 'Another Claim Text'],
+                }
             ),
             id="No matching claim_id results in empty DataFrame",
         ),
         pytest.param(
-            {'source_id': [], 'claim_id': [], 'claim': []},
-            {'claim_id': [], 'source_id': [], 'url': []},
+            {'source_id': [], 'claim_id': [], 'claim': [], 'url': [], 'domain': []},
+            {'claim_id': [], 'source_id': [], 'url': [], 'domain': [], 'claim': []},
             pd.DataFrame(
-                {'source_id_source': [], 'source_id_target': [], 'claim_id': [], 'claim': [], 'url': [], 'claim_info': []}
+                columns=[
+                    'source_id_source',
+                    'source_id_target',
+                    'claim_id',
+                    'claim_source',
+                    'claim_target',
+                    'url_source',
+                    'url_target',
+                    'domain_source',
+                    'domain_target',
+                ]
             ),
+            pd.DataFrame(columns=['source_id', 'url', 'domain', 'claim_id', 'claim']),
             id="Empty input dataframes result in empty DataFrame",
         ),
     ],
 )
-def test_create_edge_list(chunk_claims_data, claim_source_data, expected_df):
+def test_create_edge_lists(chunk_claims_data, claim_source_data, expected_source_to_source_df, expected_source_to_claim_df):
     chunk_claims_df = pd.DataFrame(chunk_claims_data)
     claim_source_df = pd.DataFrame(claim_source_data)
-    result_df = create_edge_list(chunk_claims_df, claim_source_df)
+    source_to_source_df, source_to_claim_df = create_edge_lists(chunk_claims_df, claim_source_df)
+
     # The merge operation can change column order, so we sort them to ensure the assertion is stable.
-    result_df = result_df.reindex(sorted(result_df.columns), axis=1)
-    expected_df = expected_df.reindex(sorted(expected_df.columns), axis=1)
-    pd.testing.assert_frame_equal(result_df, expected_df, check_dtype=False)
+    source_to_source_df = source_to_source_df.reindex(sorted(source_to_source_df.columns), axis=1)
+    expected_source_to_source_df = expected_source_to_source_df.reindex(sorted(expected_source_to_source_df.columns), axis=1)
+
+    source_to_claim_df = source_to_claim_df.reindex(sorted(source_to_claim_df.columns), axis=1)
+    expected_source_to_claim_df = expected_source_to_claim_df.reindex(sorted(expected_source_to_claim_df.columns), axis=1)
+
+    pd.testing.assert_frame_equal(source_to_claim_df, expected_source_to_claim_df, check_dtype=False)
+    pd.testing.assert_frame_equal(source_to_source_df, expected_source_to_source_df, check_dtype=False)
