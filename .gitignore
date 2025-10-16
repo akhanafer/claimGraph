@@ -4,3 +4,5 @@ __pycache__
 *.log
 *.graphml
 gephi_graphs
+.DS_Store
+/storage

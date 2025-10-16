@@ -13,7 +13,7 @@ from src.pydantic_models.gdelt_api_params import (
     FullTextSearchParams,
     FullTextSearchQueryCommands,
 )
-from src.utils import log_event
+from src.utils.utils import log_event
 
 GDELT_FULL_TEXT_SEARCH_BASE_URL = 'https://api.gdeltproject.org/api/v2/doc/doc?'
 logger = logging.getLogger(__name__)
@@ -24,6 +24,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 def full_text_search(
     url_parameters: FullTextSearchParams,
     query_commands: FullTextSearchQueryCommands,
+    text_to_gdelt_query_model: str,
     retry_prompt: Optional[List[Dict[str, str]]] = [],
 ) -> pd.DataFrame:
     log_event(
@@ -34,7 +35,9 @@ def full_text_search(
         query_commands=query_commands.model_dump(),
     )
 
-    gdelt_query = _convert_text_to_gdelt_query_format(url_parameters.query, retry_prompt=retry_prompt)
+    gdelt_query = _convert_text_to_gdelt_query_format(
+        url_parameters.query, retry_prompt=retry_prompt, model=text_to_gdelt_query_model
+    )
     query_with_commands = _add_query_commands_to_gdelt_query(query=gdelt_query, query_commands=query_commands).strip()
     request_parameters = url_parameters.model_copy(update={'query': query_with_commands})
 
@@ -130,9 +133,7 @@ def _create_error_result(query_with_commands: str, query_without_commands: str, 
     )
 
 
-def _convert_text_to_gdelt_query_format(
-    query: str, model: str = 'mistral:7b', retry_prompt: Optional[List[Dict[str, str]]] = []
-) -> str:
+def _convert_text_to_gdelt_query_format(query: str, model: str, retry_prompt: Optional[List[Dict[str, str]]] = []) -> str:
     if retry_prompt:
         log_event(logger, logging.INFO, 'Retrying GDELT query formatting with additional prompt', retry_prompt=retry_prompt)
     response = chat(
