@@ -1,4 +1,5 @@
 # TODO: Handle CSV Column Names
+import asyncio
 import logging
 from typing import List, Tuple
 from uuid import uuid4
@@ -15,7 +16,7 @@ from src.pydantic_models.gdelt_api_params import (
     FullTextSearchQueryCommands,
 )
 from src.utils.utils import (
-    apply_and_explode,
+    explode,
     extract_text_from_html,
     fetch_source_html,
     log_event,
@@ -71,7 +72,7 @@ class GDELTClaimExtractor(ClaimExtractor):
         content_text = extract_text_from_html(raw_html)
         return content_text
 
-    def perform_full_text_search(self, claim: str, max_retry: int, domain_exclude: str) -> List[Tuple[str, str]]:
+    async def perform_full_text_search(self, claim: str, max_retry: int, domain_exclude: str) -> List[Tuple[str, str]]:
         retry_count = 0
         retry_prompt = []
         while retry_count < max_retry:
@@ -103,7 +104,7 @@ class GDELTClaimExtractor(ClaimExtractor):
         ]
         return id_resource_pair
 
-    def get_claim_sources(self, claim_df: pd.DataFrame, domain_exclude: str, max_retry: int = 1) -> pd.DataFrame:
+    async def get_claim_sources(self, claim_df: pd.DataFrame, domain_exclude: str, max_retry: int = 1) -> pd.DataFrame:
         '''
         Get the sources for each claim in the DataFrame.
         Parameters
@@ -146,13 +147,11 @@ class GDELTClaimExtractor(ClaimExtractor):
         1       2   Claim two       def456         http://example.com/source2   ...                     ...                     ... # noqa E501
 
         '''
-        claim_df_exploded = apply_and_explode(
-            claim_df,
-            'claim',
-            self.perform_full_text_search,
-            ['source_id', 'url', 'query_with_commands', 'query_without_commands', 'warning'],
-            max_retry=max_retry,
-            domain_exclude=domain_exclude,
+        tasks = [self.perform_full_text_search(claim, max_retry, domain_exclude) for claim in claim_df['claim']]
+        results = await asyncio.gather(*tasks)
+        claim_df['claim_sources'] = results
+        claim_df_exploded = explode(
+            claim_df, 'claim_sources', ['source_id', 'url', 'query_with_commands', 'query_without_commands', 'warning']
         )
         claim_df_exploded['domain'] = claim_df_exploded['url'].apply(
             lambda x: requests.utils.urlparse(x).netloc if pd.notna(x) else None
@@ -181,7 +180,7 @@ class GDELTClaimExtractor(ClaimExtractor):
         domain = requests.utils.urlparse(series['url']).netloc
         text_chunks_df['domain'] = domain
         chunk_claims_df = await self.get_chunk_claims(text_chunks_df)
-        claim_source_df = self.get_claim_sources(
+        claim_source_df = await self.get_claim_sources(
             chunk_claims_df[['claim_id', 'claim']], domain_exclude=domain, max_retry=self.text_to_gdelt_query_max_retry
         )
         source_to_source_edge_list, source_to_claim_edge_list = self.create_edge_lists(chunk_claims_df, claim_source_df)

@@ -16,7 +16,7 @@ from src.prompts import (
     CLAIM_EXTRACTION_SYSTEM_PROMPT,
     STRUCTURED_OUTPUT_PROMPT,
 )
-from src.utils.utils import apply_and_explode, log_event
+from src.utils.utils import apply_and_explode, explode, log_event
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -87,9 +87,9 @@ class ClaimExtractor(ABC):
             return [(uuid4().hex, chunk) for chunk in text_splitter.split_text(text)]
 
         text_df = pd.DataFrame({'text': [text]})
-        text_df_copy_exploded = apply_and_explode(text_df, 'text', recursive_text_split, ['chunk_id', 'chunk'])
+        text_df_exploded = apply_and_explode(text_df, 'text', recursive_text_split, ['chunk_id', 'chunk'])
 
-        return text_df_copy_exploded
+        return text_df_exploded
 
     async def extract_claims_from_chunk(self, chunk: str) -> List[Tuple[str, str]]:
         response = await self.openai_client.chat.completions.parse(
@@ -195,15 +195,9 @@ class ClaimExtractor(ABC):
         tasks = [self.extract_claims_from_chunk(chunk) for chunk in chunk_df['chunk']]
         results = await asyncio.gather(*tasks)
 
-        # TODO: see if you extract to a function
         chunk_df['claims'] = results
-        chunk_df_exploded = chunk_df.explode('claims').rename(columns={'claims': 'claim_info'})
-        chunk_df_exploded = chunk_df_exploded.dropna(subset=['claim_info'])
-        chunk_df_exploded[['claim_id', 'claim']] = pd.DataFrame(
-            chunk_df_exploded['claim_info'].tolist(), index=chunk_df_exploded.index
-        )
-        chunk_df_exploded = chunk_df_exploded.drop(columns=['claim_info'])
-        #
+        chunk_df_exploded = explode(chunk_df, 'claims', ['claim_id', 'claim'])
+
         # Drop rows with missing or empty claim_id and claim. This happens if no claims were found in a chunk.
         chunk_df_exploded = chunk_df_exploded.dropna(subset=['claim_id', 'claim'])
         chunk_df_exploded = chunk_df_exploded[chunk_df_exploded['claim_id'] != '']

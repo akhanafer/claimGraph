@@ -105,6 +105,14 @@ def apply_and_explode(
     return df_exploded.drop(columns=['info_tuple'])
 
 
+def explode(df: pd.DataFrame, column: str, new_columns: List[str]):
+    df_exploded = df.copy().explode(column)
+    df_exploded = df_exploded.dropna(subset=[column])
+    df_exploded[new_columns] = pd.DataFrame(df_exploded[column].tolist(), index=df_exploded.index)
+    df_exploded = df_exploded.drop(columns=[column])
+    return df_exploded
+
+
 def fetch_source_html(url: str) -> str:
     try:
         log_event(logger, logging.INFO, 'Fetching source HTML %s', url=url)
