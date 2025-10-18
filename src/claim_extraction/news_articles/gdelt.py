@@ -77,7 +77,7 @@ class GDELTClaimExtractor(ClaimExtractor):
         retry_prompt = []
         while retry_count < max_retry:
             sources_df = full_text_search(
-                url_parameters=FullTextSearchParams(query=claim, maxrecords=1),
+                url_parameters=FullTextSearchParams(query=claim, maxrecords=1, mode='tonechart', format='CSV'),
                 query_commands=FullTextSearchQueryCommands(domain_exclude=domain_exclude),
                 retry_prompt=retry_prompt,
                 text_to_gdelt_query_model=self.text_to_gdelt_query_model,
@@ -97,10 +97,10 @@ class GDELTClaimExtractor(ClaimExtractor):
                 retry_count += 1
             else:
                 break
-        sources_list = sources_df[['warning', 'query_with_commands', 'query_without_commands', 'url']].values.tolist()
+        sources_list = sources_df[['warning', 'query_with_commands', 'query_without_commands', 'url', 'tone']].values.tolist()
         id_resource_pair = [
-            (uuid4().hex, url, query_with_commands, query_without_commands, warning)
-            for warning, query_with_commands, query_without_commands, url in sources_list
+            (uuid4().hex, url, tone, query_with_commands, query_without_commands, warning)
+            for warning, query_with_commands, query_without_commands, url, tone in sources_list
         ]
         return id_resource_pair
 
@@ -151,7 +151,7 @@ class GDELTClaimExtractor(ClaimExtractor):
         results = await asyncio.gather(*tasks)
         claim_df['claim_sources'] = results
         claim_df_exploded = explode(
-            claim_df, 'claim_sources', ['source_id', 'url', 'query_with_commands', 'query_without_commands', 'warning']
+            claim_df, 'claim_sources', ['source_id', 'url', 'tone', 'query_with_commands', 'query_without_commands', 'warning']
         )
         claim_df_exploded['domain'] = claim_df_exploded['url'].apply(
             lambda x: requests.utils.urlparse(x).netloc if pd.notna(x) else None
@@ -177,7 +177,8 @@ class GDELTClaimExtractor(ClaimExtractor):
         text_chunks_df = self.chunk_text(text, chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap)
         text_chunks_df['source_id'] = series['source_id']
         text_chunks_df['url'] = series['url']
-        domain = requests.utils.urlparse(series['url']).netloc
+        text_chunks_df['tone'] = series['tone']
+        domain = requests.utils.urlparse(series['url']).netloc.removeprefix('www.')
         text_chunks_df['domain'] = domain
         chunk_claims_df = await self.get_chunk_claims(text_chunks_df)
         claim_source_df = await self.get_claim_sources(

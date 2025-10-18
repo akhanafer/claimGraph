@@ -27,7 +27,7 @@ class FullTextSearchQueryCommands(BaseModel):
 class FullTextSearchParams(BaseModel):
     query: Optional[str] = Field(description='The actual query string to be searched on')
 
-    mode: Literal['artlist'] = Field(
+    mode: Literal['artlist', 'tonechart'] = Field(
         default='artlist',
         description='Specifies the specific output you would like from the API, ranging from timeline'
         ' to word clouds to article lists',

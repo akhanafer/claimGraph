@@ -250,8 +250,8 @@ class ClaimExtractor(ABC):
 
         source_to_claim_edge_list = pd.concat(
             [
-                chunk_claims_df[['source_id', 'url', 'domain', 'claim_id', 'claim']],
-                claim_source_df[['source_id', 'url', 'domain', 'claim_id', 'claim']],
+                chunk_claims_df[['source_id', 'url', 'tone', 'domain', 'claim_id', 'claim']],
+                claim_source_df[['source_id', 'url', 'tone', 'domain', 'claim_id', 'claim']],
             ]
         ).reset_index(drop=True)
         source_to_claim_edge_list['relation'] = 'makes'

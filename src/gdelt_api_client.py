@@ -67,13 +67,44 @@ def _process_response(response: requests.Response, query_with_commands: str, que
     content_type = response.headers.get('Content-Type', '').lower()
     is_csv = 'text/csv' in content_type or 'application/csv' in content_type or 'text/plain' in content_type
     if not is_csv:
-        log_event(logger, logging.WARNING, 'GDELT Full Text Search returned no results', content_type=content_type)
+        log_event(
+            logger,
+            logging.WARNING,
+            'GDELT Full Text Search returned no results',
+            content_type=content_type,
+            response_text=response.text,
+        )
         return _create_error_result(query_with_commands, query_without_commands, f'{GDELT_API_ERROR}: {response.text}')
 
     try:
         response_csv = io.StringIO(response.text)
-        response_pdf = pd.read_csv(response_csv, skiprows=1, names=['url', 'mobile_url', 'date', 'title']).drop(
-            columns=['mobile_url']
+        response_pdf = pd.read_csv(
+            response_csv,
+            skiprows=1,
+            names=[
+                'Label',
+                'Count',
+                'TopArtURL1',
+                'TopArtTitle1',
+                'TopArtURL2',
+                'TopArtTitle2',
+                'TopArtURL3',
+                'TopArtTitle3',
+                'TopArtURL4',
+                'TopArtTitle4',
+                'TopArtURL5',
+                'TopArtTitle5',
+                'TopArtURL6',
+                'TopArtTitle6',
+                'TopArtURL7',
+                'TopArtTitle7',
+                'TopArtURL8',
+                'TopArtTitle8',
+                'TopArtURL9',
+                'TopArtTitle9',
+                'TopArtURL10',
+                'TopArtTitle10',
+            ],
         )
 
         if not response_pdf.empty:
@@ -82,15 +113,30 @@ def _process_response(response: requests.Response, query_with_commands: str, que
                 logging.INFO,
                 'GDELT Full Text Search successful and returned results',
             )
+            response_pdf = _unpivot_df(response_pdf)
             response_pdf['query_with_commands'] = query_with_commands
             response_pdf['query_without_commands'] = query_without_commands
             response_pdf['warning'] = ''
+            q1 = response_pdf['tone'].quantile(0.33)
+            q2 = response_pdf['tone'].quantile(0.66)
+
+            def categorize_tone(tone):
+                if tone <= q1:
+                    return 'negative'
+                elif tone <= q2:
+                    return 'neutral'
+                else:
+                    return 'positive'
+
+            response_pdf['tone'] = response_pdf['tone'].apply(categorize_tone)
+            # Sample one article per tone category to ensure diversity
+            response_pdf = response_pdf.groupby('tone', group_keys=False).sample(
+                n=1, random_state=42, replace=True
+            )  # TODO: Make n configurable
             return response_pdf
         else:
             log_event(
-                logger,
-                logging.WARNING,
-                'GDELT Full Text Search successful but found no results',
+                logger, logging.WARNING, 'GDELT Full Text Search successful but found no results', response_text=response.text
             )
             return _create_empty_result(query_with_commands, query_without_commands, NO_RESULTS_WARNING)
     except pd.errors.ParserError as e:
@@ -106,10 +152,24 @@ def _process_response(response: requests.Response, query_with_commands: str, que
         raise Exception(f"Unexpected error parsing response: {e}")
 
 
+def _unpivot_df(df: pd.DataFrame) -> pd.DataFrame:
+    url_cols = [col for col in df.columns if "TopArtURL" in col]
+    title_cols = [col for col in df.columns if "TopArtTitle" in col]
+
+    urls = df.melt(id_vars=["Label", "Count"], value_vars=url_cols, var_name="url_num", value_name="url")
+    titles = df.melt(id_vars=["Label", "Count"], value_vars=title_cols, var_name="title_num", value_name="title")
+
+    result = pd.concat([urls[["Label", "url"]], titles["title"]], axis=1)
+
+    result = result.rename(columns={"Label": "tone"})
+    return result
+
+
 def _create_empty_result(query_with_commands: str, query_without_commands: str, warning: str) -> pd.DataFrame:
     return pd.DataFrame(
         {
             'url': [None],
+            'tone': [None],
             'date': [None],
             'title': [None],
             'query_with_commands': [query_with_commands],
@@ -124,6 +184,7 @@ def _create_error_result(query_with_commands: str, query_without_commands: str, 
     return pd.DataFrame(
         {
             'url': [None],
+            'tone': [None],
             'date': [None],
             'title': [None],
             'query_with_commands': [query_with_commands],
