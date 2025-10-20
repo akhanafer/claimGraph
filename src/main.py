@@ -29,17 +29,27 @@ async def loop(content_source_df: pd.DataFrame, claim_extractor: ClaimExtractor)
     )
 
 
-async def main(content_source_df: pd.DataFrame, hops: int = 2, prompt: Optional[str] = None) -> pd.DataFrame:
+async def main(
+    content_source_df: pd.DataFrame,
+    claim_model: str = 'mistral:7b',
+    structured_output_model: Optional[str] = None,
+    text_to_gdelt_query_model: str = 'mistral:7b',
+    text_to_gdelt_query_max_retry: int = 1,
+    chunk_size: int = 1000,
+    chunk_overlap: int = 100,
+    hops: int = 2,
+    write_file_path: Optional[str] = None,
+) -> pd.DataFrame:
     ollama_openai_client = AsyncOpenAI(base_url='http://localhost:11434/v1', api_key='dummy')
 
     gdelt_claim_extractor = GDELTClaimExtractor(
         openai_client=ollama_openai_client,
-        claim_model='mistral:7b',
-        structured_output_model=None,
-        text_to_gdelt_query_model='mistral:7b',
-        text_to_gdelt_query_max_retry=1,
-        chunk_size=1000,
-        chunk_overlap=100,
+        claim_model=claim_model,
+        structured_output_model=structured_output_model,
+        text_to_gdelt_query_model=text_to_gdelt_query_model,
+        text_to_gdelt_query_max_retry=text_to_gdelt_query_max_retry,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
     )
     source_to_source_edge_lists = []
     source_to_claim_edge_lists = []
@@ -49,27 +59,15 @@ async def main(content_source_df: pd.DataFrame, hops: int = 2, prompt: Optional[
             content_source_df=content_source_df,
             claim_extractor=gdelt_claim_extractor,
         )
-        content_source_df = claim_source_df[['source_id', 'url']]
+
+        content_source_df = claim_source_df[['source_id', 'url', 'tone']]
         source_to_source_edge_lists.append(source_to_source_edge_list)
         source_to_claim_edge_lists.append(source_to_claim_edge_list)
 
     source_to_source_edge_list = pd.concat(source_to_source_edge_lists, ignore_index=True)
     source_to_claim_edge_list = pd.concat(source_to_claim_edge_lists, ignore_index=True)
 
-    source_to_source_edge_list.to_csv(f'storage/sts_edge_list_{prompt.strip().replace(" ", "_")}_{hops}_hop.csv', index=False)
-    source_to_claim_edge_list.to_csv(f'storage/stc_edge_list_{prompt.strip().replace(" ", "_")}_{hops}_hop.csv', index=False)
+    if write_file_path:
+        source_to_source_edge_list.to_csv(f'{write_file_path}/sts_edge_list.csv', index=False)
+        source_to_claim_edge_list.to_csv(f'{write_file_path}/stc_edge_list.csv', index=False)
     return source_to_source_edge_list, source_to_claim_edge_list
-
-
-if __name__ == '__main__':
-    articles_pd = pd.DataFrame(
-        {
-            'source_id': [1],
-            'url': ['https://www.middleeasteye.net/news/poll-finds-60-percent-americans-oppose-military-aid-israel'],
-        }
-    )
-
-    hops = 1
-    source_to_source_edge_list, source_to_claim_edge_list = asyncio.run(
-        main(articles_pd, hops=hops, prompt="American Opinion on Israel Military Aid")
-    )

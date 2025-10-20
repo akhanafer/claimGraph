@@ -1,13 +1,18 @@
+from typing import Optional
+
 import numpy as np
 import ollama
 import pandas as pd
 from sklearn.metrics.pairwise import cosine_similarity
 
 
-def embed_claims(claims_df: pd.DataFrame, embedding_model: str = 'nomic-embed-text'):
+def embed_claims(
+    claims_df: pd.DataFrame, embedding_model: str = 'nomic-embed-text', write_file_path: Optional[str] = None
+) -> pd.DataFrame:
     embeddings = claims_df['claim'].apply(lambda claim: ollama.embeddings(prompt=claim, model=embedding_model).embedding)
     claims_df['claim_embedding'] = embeddings
     claims_df['claim_embedding'] = claims_df['claim_embedding']
+    claims_df.to_pickle(f'{write_file_path}/claim_embeddings.pkl')
     return claims_df
 
 

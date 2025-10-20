@@ -117,22 +117,10 @@ def _process_response(response: requests.Response, query_with_commands: str, que
             response_pdf['query_with_commands'] = query_with_commands
             response_pdf['query_without_commands'] = query_without_commands
             response_pdf['warning'] = ''
-            q1 = response_pdf['tone'].quantile(0.33)
-            q2 = response_pdf['tone'].quantile(0.66)
-
-            def categorize_tone(tone):
-                if tone <= q1:
-                    return 'negative'
-                elif tone <= q2:
-                    return 'neutral'
-                else:
-                    return 'positive'
-
-            response_pdf['tone'] = response_pdf['tone'].apply(categorize_tone)
-            # Sample one article per tone category to ensure diversity
             response_pdf = response_pdf.groupby('tone', group_keys=False).sample(
                 n=1, random_state=42, replace=True
             )  # TODO: Make n configurable
+            log_event(logger, logging.INFO, 'Sampled results from each tone category', num_samples=len(response_pdf))
             return response_pdf
         else:
             log_event(
@@ -222,18 +210,3 @@ def _add_query_commands_to_gdelt_query(query: str, query_commands: FullTextSearc
                 final_query += f'{field}:{value} '
 
     return final_query
-
-
-if __name__ == "__main__":
-    url_params = FullTextSearchParams(
-        query='"US military aid" AND Israel AND poll AND "oppose" AND "60 percent" AND Americans',
-    )
-
-    query_commands = FullTextSearchQueryCommands(domain='middleeasteye.net')
-
-    response_pdf = full_text_search(
-        url_parameters=url_params,
-        query_commands=query_commands,
-    )
-
-    response_pdf.to_csv('articlesV2.csv', index=False)
