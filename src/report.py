@@ -27,8 +27,17 @@ https://dummy-url.com, some dummy claim, 0.9657629800072585
 https://some-other-url.com, some other dummy claim, 0.4778959003888945
 https://another-dummy-url.com, some other dummy claim, 0.7598723400872585
 
-Sources should be cited and listed in a "Sources" section at the end of the report.
-The Sources section should include the URLs of the sources used in the report in markdown format.
+Format your report in the following way, with each section having its own heading in markdown:
+1. Title: A concise title that encapsulates the main theme of the report.
+2. Introduction: A brief introduction that outlines the scope and purpose of the report,
+along with the strongest arguments and claims.
+3. Body: A detailed body that delves into the various claims, providing context,
+analysis, and supporting evidence from the sources.
+4. Conclusion: A summary that encapsulates the key findings and insights derived from the report.
+5. Sources: A comprehensive numbered list of all sources referenced in the report.
+
+Any claim made in the report that comes from the Sources section should point to the corresponding numbered source in the list
+like so [1], [2], etc.
 '''
 
 PROMPT = '''
@@ -104,7 +113,7 @@ def plot_claim_source_pyvis(df, write_file_path: Optional[str] = None):
             claim_id,
             label="",  # No label shown
             color="royalblue",
-            size=20 + 10 * claim_source_counts[row['claim_id']],
+            size=12 + 3 * claim_source_counts[row['claim_id']],  # Reduced scaling for claim node size
             title=f"Claim: {row['claim']}<br>Sources: {claim_source_counts[row['claim_id']]}",
         )
         net.add_edge(source_id, claim_id, title=row['url'])

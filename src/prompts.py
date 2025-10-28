@@ -22,6 +22,9 @@ On the other hand, sentences that fall into the categories bellow should not be 
 You don't care about the validity of the claim or how true it is. Just that it's a checkable and check-worthy
 claim. All claims must be self-contained with all information present in the sentence itself.
 
+You will also be provided with a prompt indicating the theme or topic of interest. You should only return claims
+that are relevant to the provided topic. If no claims in the passage are relevant to the topic, return an empty list.
+
 Here are some examples:
 
 Passage:
@@ -30,6 +33,8 @@ The city of Greenvale recently announced a plan to replace all public buses with
 Officials claim this will reduce greenhouse gas emissions by 40% compared to current levels. Some residents, however,
 argue that the transition cost—estimated at $500 million—will lead to higher local taxes. Others believe the long-term savings
 on fuel and maintenance will offset the initial investment.
+
+Prompt: environmental impact of public transportation
 
 Claims:
     * The city of Greenvale recently announced a plan to replace all public buses with electric ones by 2030
@@ -48,6 +53,8 @@ the market. Early reviewers have praised its design but reported frequent softwa
 CEO stated that a major update addressing these issues will be rolled out within the next month. If successful, analysts predict
 this device could capture 15% of the global smartphone market by next year.
 
+Prompt: TechNova smartphone launch
+
 Claims:
     * The newly released smartphone from TechNova features a foldable display.
     * The newly released smartphone from TechNova has the longest battery life on the market.
@@ -62,6 +69,9 @@ Non-Claims:
 '''
 
 CLAIM_EXTRACTION_PROMPT = '''
+Here is the prompt indicating the topic of interest:
+{prompt}
+
 Here is the passage:
 
 {passage}
