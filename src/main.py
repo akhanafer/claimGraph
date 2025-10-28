@@ -3,20 +3,18 @@ import logging
 from typing import Optional
 
 import pandas as pd
-from openai import AsyncOpenAI
 
 from src.claim_extraction.claim_extractor import ClaimExtractor
-from src.claim_extraction.news_articles.gdelt import GDELTClaimExtractor
 from src.utils.utils import log_event
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 
-async def loop(content_source_df: pd.DataFrame, claim_extractor: ClaimExtractor):
+async def loop(content_source_df: pd.DataFrame, claim_extractor: ClaimExtractor, prompt: str) -> tuple:
     # Don't loop on rows with no URL to avoid unnecessary LLM requests and runtime
     content_source_df = content_source_df.dropna(subset=['url'])
-    tasks = [claim_extractor.create_source_claim_graph(source) for _, source in content_source_df.iterrows()]
+    tasks = [claim_extractor.create_source_claim_graph(source, prompt=prompt) for _, source in content_source_df.iterrows()]
     results = await asyncio.gather(*tasks)
     source_to_source_edge_list = [result[0] for result in results]
     source_to_claim_edge_list = [result[1] for result in results]
@@ -30,34 +28,20 @@ async def loop(content_source_df: pd.DataFrame, claim_extractor: ClaimExtractor)
 
 
 async def main(
+    claim_extractor: ClaimExtractor,
     content_source_df: pd.DataFrame,
-    claim_model: str = 'mistral:7b',
-    structured_output_model: Optional[str] = None,
-    text_to_gdelt_query_model: str = 'mistral:7b',
-    text_to_gdelt_query_max_retry: int = 1,
-    chunk_size: int = 1000,
-    chunk_overlap: int = 100,
+    prompt: str,
     hops: int = 2,
     write_file_path: Optional[str] = None,
 ) -> pd.DataFrame:
-    ollama_openai_client = AsyncOpenAI(base_url='http://localhost:11434/v1', api_key='dummy')
-
-    gdelt_claim_extractor = GDELTClaimExtractor(
-        openai_client=ollama_openai_client,
-        claim_model=claim_model,
-        structured_output_model=structured_output_model,
-        text_to_gdelt_query_model=text_to_gdelt_query_model,
-        text_to_gdelt_query_max_retry=text_to_gdelt_query_max_retry,
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-    )
     source_to_source_edge_lists = []
     source_to_claim_edge_lists = []
     for i in range(hops):
         log_event(logger, logging.INFO, 'Starting hop', hop=i + 1, total_hops=hops)
         source_to_source_edge_list, source_to_claim_edge_list, claim_source_df = await loop(
             content_source_df=content_source_df,
-            claim_extractor=gdelt_claim_extractor,
+            claim_extractor=claim_extractor,
+            prompt=prompt,
         )
 
         content_source_df = claim_source_df[['source_id', 'url', 'tone']]

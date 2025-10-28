@@ -162,7 +162,7 @@ class GDELTClaimExtractor(ClaimExtractor):
         claim_df_exploded = claim_df_exploded.dropna(subset=['url'])
         return claim_df_exploded
 
-    async def create_source_claim_graph(self, series: pd.Series) -> tuple:
+    async def create_source_claim_graph(self, series: pd.Series, prompt: str) -> tuple:
         log_event(logger, logging.INFO, 'Processing single row', source_id=series['source_id'], url=series['url'])
         text = self.get_text_from_url(series['url'])
         if not text:
@@ -180,7 +180,7 @@ class GDELTClaimExtractor(ClaimExtractor):
         text_chunks_df['tone'] = series['tone']
         domain = requests.utils.urlparse(series['url']).netloc.removeprefix('www.')
         text_chunks_df['domain'] = domain
-        chunk_claims_df = await self.get_chunk_claims(text_chunks_df)
+        chunk_claims_df = await self.get_chunk_claims(text_chunks_df, prompt=prompt)
         claim_source_df = await self.get_claim_sources(
             chunk_claims_df[['claim_id', 'claim']], domain_exclude=domain, max_retry=self.text_to_gdelt_query_max_retry
         )

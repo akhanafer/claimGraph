@@ -91,13 +91,13 @@ class ClaimExtractor(ABC):
 
         return text_df_exploded
 
-    async def extract_claims_from_chunk(self, chunk: str) -> List[Tuple[str, str]]:
+    async def extract_claims_from_chunk(self, chunk: str, prompt: str) -> List[Tuple[str, str]]:
         response = await self.openai_client.chat.completions.parse(
             model=self.claim_model,
             messages=[
                 {'role': 'system', 'content': CLAIM_EXTRACTION_SYSTEM_PROMPT},
                 {'role': 'system', 'content': 'provide your answer in a list like so "1. subject: <subject>, claim: <claim>"'},
-                {'role': 'user', 'content': CLAIM_EXTRACTION_PROMPT.format(passage=chunk)},
+                {'role': 'user', 'content': CLAIM_EXTRACTION_PROMPT.format(passage=chunk, prompt=prompt)},
             ],
             response_format=TextPassage if not self.structured_output_model else None,
         )
@@ -117,6 +117,8 @@ class ClaimExtractor(ABC):
 
         try:
             passage_claims = TextPassage.model_validate_json(response.choices[0].message.parsed.model_dump_json()).claims
+            if not passage_claims:
+                log_event(logger, logging.WARNING, 'No claims extracted from chunk', chunk=chunk)
         except ValidationError as e:
             log_event(
                 logger, logging.ERROR, 'Error parsing model response', error=str(e), response=response.choices[0].message.content
@@ -128,6 +130,7 @@ class ClaimExtractor(ABC):
     async def get_chunk_claims(
         self,
         chunk_df: pd.DataFrame,
+        prompt: str,
     ) -> pd.DataFrame:
         '''Async version of get_chunk_claims.
         Extracts claims from text chunks using a language model.
@@ -192,10 +195,11 @@ class ClaimExtractor(ABC):
                 "Get Chunk Claims Input DataFrame is empty. This may happen if no text was extracted from the source URL."
             )
 
-        tasks = [self.extract_claims_from_chunk(chunk) for chunk in chunk_df['chunk']]
+        tasks = [self.extract_claims_from_chunk(chunk, prompt=prompt) for chunk in chunk_df['chunk']]
         results = await asyncio.gather(*tasks)
 
         chunk_df['claims'] = results
+        chunk_df['claims'] = chunk_df['claims'].apply(lambda x: x if isinstance(x, list) else [])  # Handle non-list responses
         chunk_df_exploded = explode(chunk_df, 'claims', ['claim_id', 'claim'])
 
         # Drop rows with missing or empty claim_id and claim. This happens if no claims were found in a chunk.
