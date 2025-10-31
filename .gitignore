@@ -6,3 +6,4 @@ __pycache__
 gephi_graphs
 .DS_Store
 /storage
+/lib

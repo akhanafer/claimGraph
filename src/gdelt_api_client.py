@@ -78,34 +78,7 @@ def _process_response(response: requests.Response, query_with_commands: str, que
 
     try:
         response_csv = io.StringIO(response.text)
-        response_pdf = pd.read_csv(
-            response_csv,
-            skiprows=1,
-            names=[
-                'Label',
-                'Count',
-                'TopArtURL1',
-                'TopArtTitle1',
-                'TopArtURL2',
-                'TopArtTitle2',
-                'TopArtURL3',
-                'TopArtTitle3',
-                'TopArtURL4',
-                'TopArtTitle4',
-                'TopArtURL5',
-                'TopArtTitle5',
-                'TopArtURL6',
-                'TopArtTitle6',
-                'TopArtURL7',
-                'TopArtTitle7',
-                'TopArtURL8',
-                'TopArtTitle8',
-                'TopArtURL9',
-                'TopArtTitle9',
-                'TopArtURL10',
-                'TopArtTitle10',
-            ],
-        )
+        response_pdf = pd.read_csv(response_csv)
 
         if not response_pdf.empty:
             log_event(
@@ -150,6 +123,10 @@ def _unpivot_df(df: pd.DataFrame) -> pd.DataFrame:
     result = pd.concat([urls[["Label", "url"]], titles["title"]], axis=1)
 
     result = result.rename(columns={"Label": "tone"})
+
+    # Drop rows with NaN URLs, this can happen if GDELT
+    # returns rows where some TopArtURL columns are empty
+    result = result.dropna(subset=["url"]).reset_index(drop=True)
     return result
 
 

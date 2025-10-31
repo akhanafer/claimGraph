@@ -71,14 +71,13 @@ def generate_report_summary(
     return summary
 
 
-def plot_claim_source_pyvis(df, write_file_path: Optional[str] = None):
+def plot_claim_source_pyvis(df, write_file_path: Optional[str] = None) -> str:
     net = Network(height="600px", width="100%", directed=True, notebook=False)
 
     # Count sources per claim for sizing
     claim_source_counts = Counter(df['claim_id'])
 
     # Normalize tone values for gradient
-    print(df.columns)
     if 'tone' in df.columns:
         tones = df['tone'].astype(float)
         min_tone, max_tone = tones.min(), tones.max()
@@ -146,7 +145,7 @@ def plot_claim_source_pyvis(df, write_file_path: Optional[str] = None):
 
     net.show_buttons(filter_=['physics'])
     net.save_graph(f'{write_file_path}/pyvis_graph.html')
-    return write_file_path
+    return net.html
 
 
 def get_tone_chart(url: str):

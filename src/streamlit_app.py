@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 
 import pandas as pd
 import streamlit as st
@@ -63,7 +64,7 @@ if "last_option" not in st.session_state:
     st.session_state["last_option"] = option
 
 if option != st.session_state["last_option"]:
-    for key in ["summary", "tone_chart_fig", "timeline_tone_chart_fig"]:
+    for key in ["summary", "tone_chart_fig", "timeline_tone_chart_fig", "claim_source_graph_fig"]:
         st.session_state[key] = None
     st.session_state["last_option"] = option
 
@@ -103,6 +104,7 @@ with st.sidebar.expander("Model & Client Configuration", expanded=False):
     api_key = st.text_input("OpenAI API Key", value="dummy")
     embedding_model = st.selectbox("Embedding Model", options=["nomic-embed-text"], index=0)
     claim_model = st.selectbox("Claim Model", options=["mistral:7b", "gpt-oss:20b", "deepseek-r1:8b"], index=0)
+    report_summary_model = st.selectbox("Report Summary Model", options=["mistral:7b", "gpt-oss:20b", "deepseek-r1:8b"], index=0)
     structured_output_model = st.selectbox(
         "Structured Output Model", options=["mistral:7b", "gpt-oss:20b", "deepseek-r1:8b", None], index=3
     )
@@ -130,7 +132,15 @@ gdelt_claim_extractor = GDELTClaimExtractor(
 
 # TODO: Refactor and reuse
 async def run_full_analysis():
-    articles_pd = pd.DataFrame({'source_id': [1], 'tone': [3], 'url': [url]})
+    if url:
+        articles_pd = pd.DataFrame({'source_id': [1], 'tone': [3], 'url': [url]})
+    else:
+        id_resource_pair = await gdelt_claim_extractor.perform_full_text_search(
+            claim=user_prompt, max_retry=text_to_gdelt_query_max_retry, domain_exclude=''
+        )
+        columns = ['source_id', 'url', 'tone', 'query_with_commands', 'query_without_commands', 'warning']
+        articles_pd = pd.DataFrame(id_resource_pair, columns=columns)
+        articles_pd = articles_pd[['source_id', 'url', 'tone']].head(1)
     source_to_source, source_to_claim = await main(
         claim_extractor=gdelt_claim_extractor,
         content_source_df=articles_pd,
@@ -142,7 +152,7 @@ async def run_full_analysis():
     st.session_state['claim_source_graph_fig'] = plot_claim_source_pyvis(source_to_claim, write_file_path=write_file_path)
     related_claims = await claim_embedding_client.get_similar_claims(user_prompt, claim_embeddings, top_k=20)
     summary = generate_report_summary(
-        user_prompt, related_claims[['url', 'claim', 'similarity']], model='deepseek-r1:8b', write_file_path=write_file_path
+        user_prompt, related_claims[['url', 'claim', 'similarity']], model=report_summary_model, write_file_path=write_file_path
     )
     st.session_state['summary'] = summary
 
@@ -151,39 +161,44 @@ if submit_button:
     write_file_path = f'storage/{user_prompt.strip().replace(" ", "_")}_{num_hops}_hops'
     if not os.path.exists(write_file_path):
         os.makedirs(write_file_path)
-    model = 'deepseek-r1:8b'
+
     st.subheader(f'{user_prompt} - Report Summary')
+    user_prompt_cleaned = re.sub(r' \d+ hops$', '', user_prompt)
+
     st.session_state['tone_chart_fig'] = get_tone_chart(
-        url=f'https://api.gdeltproject.org/api/v2/doc/doc?query={user_prompt} sourcelang:english&mode=ToneChart&format=json'
+        url=f'https://api.gdeltproject.org/api/v2/doc/doc?query={user_prompt_cleaned}\
+              sourcelang:english&mode=ToneChart&format=json'
     )  # TODO: Make URLs clickable in the bar chart hover text
+
     st.session_state['timeline_tone_chart_fig'] = get_timeline_tone_chart(
-        url=f'https://api.gdeltproject.org/api/v2/doc/doc?query={user_prompt} sourcelang:english&mode=TimelineTone&format=json'
+        url=f'https://api.gdeltproject.org/api/v2/doc/doc?query={user_prompt_cleaned}\
+              sourcelang:english&mode=TimelineTone&format=json'
     )
+
     if option == "Select from an existing topic" and user_prompt:
-        with open(f'streamlit_reports/{user_prompt.replace(" ", "_")}.txt', 'r') as f:
+        st.session_state['claim_source_graph_fig'] = write_file_path
+        with open(f'storage/{user_prompt.replace(" ", "_")}/report.txt', 'r') as f:
             st.session_state['summary'] = f.read()
+
+        with open(f'storage/{user_prompt.replace(" ", "_")}/pyvis_graph.html', 'r') as f:
+            st.session_state['claim_source_graph_fig'] = f.read()
+
     elif option == "Provide a topic and number of hops" and user_prompt:
-        claims_df = pd.read_pickle('storage/claim_embeddings.pkl')
-        related_claims = claim_embedding_client.get_similar_claims(user_prompt, claims_df, top_k=20)
-        summary = generate_report_summary(user_prompt, related_claims[['url', 'claim', 'similarity']], model=model)
-        st.session_state['summary'] = summary
+        asyncio.run(run_full_analysis())
     elif option == "Provide a URL" and url and user_prompt:
         asyncio.run(run_full_analysis())
 
 # --- Output Display Logic ---
-col1, col2 = st.columns(2)
-if st.session_state['tone_chart_fig']:
+if st.session_state['tone_chart_fig'] and st.session_state['timeline_tone_chart_fig']:
     st.subheader('Tone Charts for sources related to your prompt', divider=True)
+    col1, col2 = st.columns(2)
     with col1:
         st.plotly_chart(st.session_state['tone_chart_fig'])
-if st.session_state['timeline_tone_chart_fig']:
     with col2:
         st.plotly_chart(st.session_state['timeline_tone_chart_fig'])
 if st.session_state.get('claim_source_graph_fig') is not None:
-    with open(f'storage/{user_prompt.strip().replace(" ", "_")}_{num_hops}_hops/pyvis_graph.html', 'r') as f:
-        html_content = f.read()
     st.subheader("Claim-Source Graph", divider=True)
-    st.components.v1.html(html_content, height=600, scrolling=True)
+    st.components.v1.html(st.session_state['claim_source_graph_fig'], height=600, scrolling=True)
 if st.session_state['summary']:
     st.subheader("LLM Report", divider=True)
     st.markdown(st.session_state['summary'])
